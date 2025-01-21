@@ -63,12 +63,12 @@ class ResNextBottleNeckC(nn.Module):
 
 class ResNext(nn.Module):
 
-    def __init__(self, block, num_blocks, class_names=47):  # TODO: CHANGE BACK!
+    def __init__(self, block, num_blocks, class_names=100):
         super().__init__()
         self.in_channels = 64
 
         self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 64, 3, stride=1, padding=1, bias=False),  # TODO: CHANGE BACK!
+            nn.Conv2d(3, 64, 3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True)
         )
