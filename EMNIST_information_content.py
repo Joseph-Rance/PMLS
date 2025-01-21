@@ -1,26 +1,33 @@
-"""MNIST classification."""
+"""Compute the information content of each class in the EMNIST task.
+
+To compute the information content of the whole task, set
+CLASS_STEP to 47
+
+see CIFAR100_information_content.py for better explanation of the process
+
+"""
 
 from math import ceil
 import random
-from tqdm import tqdm, trange
+from tqdm import trange
 import numpy as np
 
 import torch
 from torch.optim import SGD
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.functional import cross_entropy
 from torchvision import transforms
-from torchvision.datasets import MNIST
+from torchvision.datasets import EMNIST
 
 from cnn import CNN
 
 import warnings
 warnings.filterwarnings("ignore", message="^.*epoch parameter in `scheduler.step()` was not necessary.*$")
 
-SEED = 0
+SEED = 5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 128
-MAX_EPOCHS = 30
+TRAINING_EPOCHS = 4
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -33,48 +40,51 @@ transform = transforms.Compose([
     transforms.Normalize((0.1307,), (0.3081,))
 ])
 
-train_dataset = MNIST("./data", train=True, transform=transform, download=True)
-test_dataset = MNIST("./data", train=False, transform=transform, download=True)
+train_dataset = EMNIST("./data", split="balanced", train=True, transform=transform, download=True)
+test_dataset = EMNIST("./data", split="balanced", train=False, transform=transform, download=True)
 
-inputs = [[] for __ in range(10)]
+CLASS_STEP = 3
+
+perm = np.random.permutation(47)  # to shuffle classes
+
+inputs = [[] for __ in range(ceil(47/CLASS_STEP))]
+labels = [[] for __ in range(ceil(47/CLASS_STEP))] 
 
 for x, y in train_dataset:
-    inputs[y].append(x)
+    inputs[perm[y]//CLASS_STEP].append(x)
+    labels[perm[y]//CLASS_STEP].append(y)
 
 for x, y in test_dataset:
-    inputs[y].append(x)
+    inputs[perm[y]//CLASS_STEP].append(x)
+    labels[perm[y]//CLASS_STEP].append(y)
+
+# note that can't use all 47 classes because we dont want last epoch to have less than CLASS_STEP classes
+# TODO: change if CLASS_STEP is changed
+inputs = inputs[:-1]
+labels = labels[:-1]
 
 lengths = [len(i) for i in inputs]
 
-labels = torch.cat([torch.tensor([i]*len(inputs[i])) for i in range(10)])
-inputs = torch.cat([torch.cat(i, dim=0) for i in inputs]).reshape((70_000, 1, 28, 28))
+inputs = torch.cat([torch.cat(i, dim=0) for i in inputs]).reshape((126_000, 1, 28, 28))
+labels = torch.cat([torch.tensor(i) for i in labels])
 
-model = CNN().to(DEVICE)  # works better than the pytorch 32x4d version
+# now inputs holds all the inputs for class 0, then all the inputs for class 1, and so on.
+# since we want to access all classes up to some class, t, we can just train on slices of
+# inputs and labels
+
+model = CNN(num_outputs=47).to(DEVICE)  # works better than the pytorch 32x4d version
 model = torch.compile(model)
 torch.backends.cudnn.benchmark = True
 
-FINETUNE_STEP = 20
-
-# multipliers[i] ^ FINETUNE_STEP - lengths[i] * multipliers[i] + lengths[i] - 1 = 0
-
-# x ^ 20 - 6903 * x + 6903 - 1 = 0 -> x = 1.503
-# x ^ 20 - 7877 * x + 7877 - 1 = 0 -> x = 1.515
-# x ^ 20 - 6990 * x + 6990 - 1 = 0 -> x = 1.504
-# x ^ 20 - 7141 * x + 7141 - 1 = 0 -> x = 1.506
-# x ^ 20 - 6824 * x + 6824 - 1 = 0 -> x = 1.502
-# x ^ 20 - 6313 * x + 6313 - 1 = 0 -> x = 1.495
-# x ^ 20 - 6876 * x + 6876 - 1 = 0 -> x = 1.503
-# x ^ 20 - 7293 * x + 7293 - 1 = 0 -> x = 1.508
-# x ^ 20 - 6825 * x + 6825 - 1 = 0 -> x = 1.502
-# x ^ 20 - 6958 * x + 6958 - 1 = 0 -> x = 1.504
-
-multipliers = [1.503, 1.515, 1.504, 1.506, 1.502, 1.495, 1.503, 1.508, 1.502, 1.504]
+FINETUNE_STEP = 10
+# MUTLIPLIER ^ FINETUNE_STEP - 2800 * CLASS_STEP * MUTLIPLIER + 2800 * CLASS_STEP - 1 = 0
+MUTLIPLIER = 2.58481
 
 def get_batch_idxs(cg, bg):
 
     num_pretrain = sum(lengths[:cg])
 
-    finetune_sizes = [round(multipliers[cg]**i) for i in range(bg+1)]
+    finetune_sizes = [round(MUTLIPLIER**i) for i in range(bg+1)]
 
     start = num_pretrain + sum(finetune_sizes[:-1])
     length = min(finetune_sizes[-1], lengths[cg])
@@ -94,13 +104,13 @@ def train(inputs, labels, cg, bg):
     labels[:data_end] = labels[perm]
 
     optimiser = SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
-    scheduler = ReduceLROnPlateau(optimiser, factor=0.2, patience=300, threshold=0.1, threshold_mode="rel")
+    scheduler = CosineAnnealingLR(optimiser, T_max=TRAINING_EPOCHS*ceil(data_end/BATCH_SIZE))
 
     lrs, loss, top1, top5, norms = [], [], [], [], []
 
     model.train()
 
-    for _epoch in trange(MAX_EPOCHS, leave=False):
+    for _epoch in trange(TRAINING_EPOCHS, leave=False):
 
         norm_epoch = loss_epoch = top1_epoch = top5_epoch = num_examples = 0
         train_loader_bar = trange(ceil(data_end / BATCH_SIZE), leave=False, bar_format="{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{desc}]",
@@ -120,7 +130,7 @@ def train(inputs, labels, cg, bg):
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
             optimiser.zero_grad()
-            scheduler.step(loss_batch)
+            scheduler.step()
 
             with torch.no_grad():
 
@@ -142,9 +152,6 @@ def train(inputs, labels, cg, bg):
         top1.append(top1_epoch)
         top5.append(top5_epoch)
         norms.append(norm_epoch)
-
-        if optimiser.param_groups[0]['lr'] < 0.0005:
-            break  # quit when we have converged
     
     return (lrs, loss, top1, top5, norms, num_examples)
 
@@ -162,7 +169,7 @@ def test(inputs, labels, cg, bg):
     loss = cross_entropy(z, y, reduction="sum")
 
     num_examples = x.size()[0]
-    assert num_examples == data_end - data_start
+    #assert num_examples == data_end - data_start
 
     top = z.topk(5, 1, sorted=True).indices
     top1 = (top[:, 0] == y).sum().item()
@@ -184,7 +191,7 @@ if __name__ == "__main__":
     pretrain_data = []
 
     # since dataset lives on GPU we need to index it based on cg and bg rather than keeping index lists
-    for cg in trange(10):
+    for cg in trange(len(lengths)):
 
         for bg in trange(FINETUNE_STEP, leave=False):
 

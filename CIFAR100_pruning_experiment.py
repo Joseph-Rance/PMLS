@@ -1,3 +1,5 @@
+"""Test performance of CIFAR-100 models at different pruning levels"""
+
 from copy import deepcopy
 import random
 from time import perf_counter
@@ -25,11 +27,6 @@ torch.manual_seed(SEED)
 
 torch.set_float32_matmul_precision('high')
 
-from torchsummary import summary
-
-model = resnext50()
-summary(model, (3, 32, 32))
-1/0
 train_transform = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
@@ -125,6 +122,8 @@ if __name__ == "__main__":
 
     data_splits = [(i+1)*10 for i in range(10)]
 
+    # load pretrained models
+
     models = [
         (f"outs/model_{split}_{dir}.pt", resnext50())
             for split in data_splits for dir in ["forward", "backward"]
@@ -133,16 +132,17 @@ if __name__ == "__main__":
     for path, model in models:
         model.load_state_dict({k[10:]:v for k,v in torch.load(path, weights_only=True).items() if k.startswith("_orig_mod.")})
 
+    # iterate over models (i.e. forward and backward for each number of classes)
     for i, (split, (__, model)) in enumerate(zip([j for i in data_splits for j in [i, i]], models)):
         print(f"\n== {split} CLASSES ==")
 
         model.to(DEVICE)
 
-        PRUNE_AMOUNTS = [6.25, 6.50, 6.75]
+        PRUNE_AMOUNTS = [0.625, 0.650, 0.675]  # proportion of weights to prune
 
         for j in range(len(PRUNE_AMOUNTS)):
 
-            # == train the model for FINETUNE_EPOCHS with high regularisation to encourage sparsity ==
+            # train the model for FINETUNE_EPOCHS with high regularisation to encourage sparsity
 
             initial_acc = test(model, test_loaders[i//2])
 
@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
             sparse_acc = test(model, test_loaders[i//2])
 
-            # == prune the model an extra PRUNE_AMOUNT ==
+            # prune the largest layers in the model an extra PRUNE_AMOUNT (ontop of what it is already pruned to)
 
             start_time = perf_counter()
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
 
             prune_acc = test(model, test_loaders[i//2])
 
-            # == finetune again to clear up problems from pruning ==
+            # finetune again to clear up problems from pruning
 
             finetune(model, train_loaders[i//2][1], reg=5e-4)
 

@@ -1,4 +1,4 @@
-"""CIFAR-100 classification."""
+"""Train CIFAR-100 models on different numbers of classes and save them as outs/model_classes_direction.pt"""
 
 import random
 from tqdm import tqdm, trange
@@ -101,7 +101,7 @@ def train(loader):
     for epoch in trange(MAX_EPOCHS, leave=False):
 
         model.train()
-        loss_train = top1_train = top5_train = num_train_examples = norm_epoch = 0
+        loss_train = top1_train = _top5_train = num_train_examples = _norm_epoch = 0
 
         train_loader_bar = tqdm(loader, leave=False, bar_format="{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{desc}]",
                                                            postfix="lr: ?, loss: ?, train@1: ?%, val@1*: ?%")

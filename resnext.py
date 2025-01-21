@@ -1,8 +1,7 @@
 """resnext in pytorch
 
+This implementation is not my own work.
 SEE: https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnext.py
-
-
 
 [1] Saining Xie, Ross Girshick, Piotr Dollár, Zhuowen Tu, Kaiming He.
 
@@ -10,8 +9,6 @@ SEE: https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnext.
     https://arxiv.org/abs/1611.05431
 """
 
-import math
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 

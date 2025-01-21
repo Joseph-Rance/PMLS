@@ -1,4 +1,9 @@
-"""CIFAR-100 classification."""
+"""Compute the information content of each class in the CIFAR-100 task.
+
+To compute the information content of the whole task, set
+CLASS_STEP to 100, and adjust the BATCH_STEP accordingly
+
+"""
 
 import random
 from tqdm import tqdm, trange
@@ -20,7 +25,7 @@ warnings.filterwarnings("ignore", message="^.*epoch parameter in `scheduler.step
 SEED = 0
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 128
-MAX_EPOCHS = 100
+MAX_EPOCHS = 100  # we quit training when loss stagnates, so rarely hit this value
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -28,7 +33,9 @@ torch.manual_seed(SEED)
 
 torch.set_float32_matmul_precision('high')
 
-aug_transform = transforms.Compose([  # we may only augment data from previous classes
+# we only want to augment data that is not on the current class we are learning, because augmentation
+# introduces information about the current class that we do not account for in our calculation ...
+aug_transform = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(15),
@@ -36,11 +43,15 @@ aug_transform = transforms.Compose([  # we may only augment data from previous c
     transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
 ])
 
+# ... therefore we use this transform for the current class
 other_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
 ])
 
+# we don't need a test dataset, because we only care about information at the moment, not generalisation
+# therefore we may as well train on the test dataset as well
+# don't transform data here because we don't know if we want to augment yet. This is done later.
 train_dataset = CIFAR100("./data", train=True, transform=None, download=True)
 test_dataset = CIFAR100("./data", train=False, transform=None, download=True)
 combined_dataset = ConcatDataset([train_dataset, test_dataset])
@@ -52,21 +63,44 @@ classes = [[] for __ in range(100//CLASS_STEP)]
 for i, (_x, y) in enumerate(combined_dataset):
     classes[y//CLASS_STEP].append(i)
 
-BATCH_STEP = 1000
+BATCH_STEP = 1000  # we retrain the model every BATCH_STEP data points
 assert (60_000 // CLASS_STEP) % BATCH_STEP == 0  # necessary for implementation but not in general
+
+# A. uncomment below for constant step size
 
 for cg, __ in enumerate(classes):
     random.shuffle(classes[cg])
     classes[cg] = np.array(classes[cg]).reshape((-1, BATCH_STEP)).tolist()
 
-model = resnext50().to(DEVICE)  # works better than the pytorch 32x4d version
+# B. uncomment below for variable step size
+#
+#FINETUNE_STEP = 10
+#MULTIPLIER = 1.87
+#
+## we finetune on smaller datasets initially because we want to train the model
+## more frequently to improve accuracy as fast as possible
+#finetune_sizes = [round(MULTIPLIER**i) for i in range(FINETUNE_STEP)]
+#
+#for cg, __ in enumerate(classes):
+#    random.shuffle(classes[cg])
+#    split = classes[cg]
+#    classes[cg] = [[classes[cg][0]]]
+#
+#    for i in range(1, FINETUNE_STEP):
+#        finetune_sizes[i] = min(600*CLASS_STEP, finetune_sizes[i] + finetune_sizes[i-1])
+#        classes[cg].append(split[finetune_sizes[i-1]:finetune_sizes[i]])
+
+model = resnext50().to(DEVICE)  # this implementation works better than the pytorch 32x4d version for some reason?
 model = torch.compile(model)
 torch.backends.cudnn.benchmark = True
 
+# this allows us to index a subset of our dataset, while specifying which datapoints to augment and which not to
+# this implementation is very similar to torch.utils.data.Subset
 class SubsetAugment(Dataset):
 
     def __init__(self, dataset, aug_indices, other_indices, aug_transform, other_transform) -> None:
         self.dataset = dataset
+        # save tuples of index and pointer to the transform it uses
         self.indices = [(i, aug_transform) for i in aug_indices] + [(i, other_transform) for i in other_indices]
 
         random.shuffle(self.indices)
@@ -185,15 +219,27 @@ if __name__ == "__main__":
     losses = []
     full_res = []
     pretrain_data = []
+
+    # we compute the information content of each class, given the previous classes already computed
+    # this means we do not need to reset the model on each iteration
     for cg in trange(len(classes)):
-        finetune_data = []
+
+        finetune_data = []  # indexes of data we have seen of the current class
+
+        # we iterate over groups of indexes pointing to data in class cg
         for bg in trange(len(classes[cg]), leave=False):
 
             # don't reset the model!
+
+            # first train the model using the data from previous classes (pretrain_data), and the
+            # data we have seen so far from this class (finetune_data)
             train_res = train(pretrain_data, finetune_data)
 
+            # then get the next group of data from this class. If we are using constant step size (A, above), these sets are always
+            # the same size. If we are using variable step size (B), these get bigger as we see more data from the class
             new_data = classes[cg][bg]
 
+            # test the information content (loss) of the new data
             loss, (top1, top5), num_examples = test(new_data)
 
             full_res.append((train_res, (loss.cpu(), (top1, top5), num_examples)))
@@ -202,7 +248,8 @@ if __name__ == "__main__":
             np.save(f"outs/losses.npy", losses)
             torch.save(model.state_dict(), f"outs/models/model_{cg}_{bg}.pt")
 
-            # update dataset with this batch
+            # update dataset with the new data
             finetune_data += new_data  # not super efficient but dataset is relatively small so this is probably ok
 
+        # once we have seen a full class, add it to the pretrain data for the next class
         pretrain_data += finetune_data

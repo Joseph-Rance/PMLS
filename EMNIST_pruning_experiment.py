@@ -1,12 +1,12 @@
+"""Test performance of EMNIST models at different pruning levels"""
+
 from math import ceil
-from copy import deepcopy
 import random
 from time import perf_counter
-from tqdm import tqdm, trange
+from tqdm import trange
 import numpy as np
 import torch
 from torch.optim import SGD
-from torch.utils.data import DataLoader, Subset
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.functional import cross_entropy
 import torch.nn.utils.prune as prune
@@ -51,8 +51,8 @@ for x, y in test_dataset:
     test_inputs[perm[y]//CLASS_STEP].append(x)
     test_labels[perm[y]//CLASS_STEP].append(y)
 
-# note that can't use all 47 classes because we dont want last epoch to have less than CLASS_STEP classes
-# TODO: change if CLASS_STEP is changed
+# note that can't use all 47 classes because we dont want last epoch to have fewer than CLASS_STEP classes
+# TODO: change this if CLASS_STEP is changed!
 train_inputs = train_inputs[:-1]
 train_labels = train_labels[:-1]
 test_inputs = test_inputs[:-1]
@@ -67,6 +67,10 @@ train_labels = torch.cat([torch.tensor(i[:1000]) for i in train_labels])
 test_inputs = torch.cat([torch.cat(i[:1000], dim=0) for i in test_inputs]).reshape((-1, 1, 28, 28))
 test_labels = torch.cat([torch.tensor(i[:1000]) for i in test_labels])
 
+# now inputs holds all the inputs for class 0, then all the inputs for class 1, and so on.
+# since we want to access all classes up to some class, t, we can just train on slices of
+# inputs and labels
+
 torch.backends.cudnn.benchmark = True
 
 @torch.no_grad()
@@ -80,14 +84,14 @@ def test(model, inputs, labels, i):
     y = labels[data_start:data_end]
 
     z = model(x)
-    loss = cross_entropy(z, y, reduction="sum")
+    _loss = cross_entropy(z, y, reduction="sum")
 
     num_examples = x.size()[0]
     #assert num_examples == data_end - data_start
 
     top = z.topk(5, 1, sorted=True).indices
     top1 = (top[:, 0] == y).sum().item()
-    top5 = (top == y.view(-1, 1)).sum().item()
+    _top5 = (top == y.view(-1, 1)).sum().item()
 
     #return loss, (top1, top5), num_examples
     return top1 / num_examples
@@ -135,6 +139,7 @@ if __name__ == "__main__":
             for split in data_splits for dir in ["forward"]
     ]
 
+    # uncomment to use pretrained models (not necessary when training takes such little time)
     #for path, model in models:
     #    model.load_state_dict({k[10:]:v for k,v in torch.load(path, weights_only=True).items() if k.startswith("_orig_mod.")})
 
@@ -151,12 +156,12 @@ if __name__ == "__main__":
 
         finetune(model, train_inputs, train_labels, int(split/10-1), reg=5e-3, initial_lr=0.1, epochs=4)
 
-        PRUNE_AMOUNT = 0.1
-        PRUNE_STEPS = 10
+        PRUNE_AMOUNT = 0.1  # we prune for an extra 10%, ...
+        PRUNE_STEPS = 10  # ... 10 times
 
         for j in range(PRUNE_STEPS):
 
-            # == train the model for FINETUNE_EPOCHS with high regularisation to encourage sparsity ==
+            # train the model for FINETUNE_EPOCHS with high regularisation to encourage sparsity
 
             initial_acc = test(model, test_inputs, test_labels, int(split/10-1))
 
@@ -164,7 +169,7 @@ if __name__ == "__main__":
 
             sparse_acc = test(model, test_inputs, test_labels, int(split/10-1))
 
-            # == prune the model an extra PRUNE_AMOUNT ==
+            # prune the model an extra PRUNE_AMOUNT
 
             start_time = perf_counter()
 
@@ -176,7 +181,7 @@ if __name__ == "__main__":
 
             prune_acc = test(model, test_inputs, test_labels, int(split/10-1))
 
-            # == finetune again to clear up problems from pruning ==
+            # finetune again to clear up problems from pruning
 
             finetune(model, train_inputs, train_labels, int(split/10-1), reg=5e-4)
 

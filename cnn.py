@@ -1,4 +1,7 @@
-# https://github.com/tuomaso/train_mnist_fast
+"""
+This implementation is not my own work.
+SEE: https://github.com/tuomaso/train_mnist_fast
+"""
 
 import torch
 import torch.nn as nn

@@ -1,10 +1,9 @@
-"""MNIST classification."""
+"""EMNIST classification."""
 
 from math import ceil
 import random
 from tqdm import tqdm, trange
 import numpy as np
-
 import torch
 from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -38,7 +37,7 @@ train_dataset = EMNIST("./data", split="balanced", train=True, transform=transfo
 # skip val for now
 test_dataset = EMNIST("./data", split="balanced", train=False, transform=transform, download=True)
 
-# no need for dataloaders - we can just load the full dataset into GPU memory!
+# no need for dataloaders - we can just load the full dataset into GPU memory! This is *a lot* faster.
 # usually dataloaders shuffle on every epoch which we are going to lose here but that doesn't really matter
 # we can't augment the data every easily this way, but that also doesn't matter much
 
@@ -119,7 +118,6 @@ if __name__ == "__main__":
             x = train_inputs[idx*BATCH_SIZE : (idx+1)*BATCH_SIZE]
             y = train_labels[idx*BATCH_SIZE : (idx+1)*BATCH_SIZE]
 
-            # TODO: does this help??
             with torch.autocast(device_type=DEVICE, dtype=torch.float16):
 
                 z = model(x)
