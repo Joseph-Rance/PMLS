@@ -72,7 +72,7 @@ def test(dataset, tqdm_subst=lambda x: x):
     model.eval()
     loss = top1 = top5 = num_examples = 0
 
-    for idx in tqdm_subst(range(ceil(len(train_inputs) / BATCH_SIZE))):
+    for idx in tqdm_subst(range(ceil(len(dataset[0]) / BATCH_SIZE))):
 
         x = dataset[0][idx*BATCH_SIZE : (idx+1)*BATCH_SIZE]
         y = dataset[1][idx*BATCH_SIZE : (idx+1)*BATCH_SIZE]
